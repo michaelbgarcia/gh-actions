@@ -12,7 +12,17 @@ name: 01 - Hello Actions
 on:
   # `workflow_dispatch` puts a "Run workflow" button in the UI. Every lesson
   # here has it so you can fire any of them by hand without pushing a commit.
+  # Here we add `inputs` so manual runs can pass parameters to the workflow.
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Branch to run against (used only for informational purposes)'
+        required: true
+        default: 'main'
+      greeting:
+        description: 'Custom greeting message to show when the workflow runs'
+        required: false
+        default: 'Hello from a GitHub-hosted runner.'
 
   push:
     branches: [main]
@@ -61,6 +71,11 @@ jobs:
           echo "SHA       : ${{ github.sha }}"
           echo "Actor     : ${{ github.actor }}"
           echo "Run number: ${{ github.run_number }}"
+          # If the workflow was started manually, `github.event.inputs` will
+          # contain any inputs provided via the UI. For push-triggered runs
+          # these values will be empty.
+          echo "Input: target_branch = ${{ github.event.inputs.target_branch }}"
+          echo "Input: greeting      = ${{ github.event.inputs.greeting }}"
 
       # KEY POINT: the runner does NOT have your code until you check it out.
       # Comment out this step and watch the next one fail.
