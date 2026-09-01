@@ -1,0 +1,70 @@
+# ============================================================================
+# LESSON 02 - Getting R onto a runner.
+#
+# New ideas: `uses` with inputs, the r-lib/actions family, binary package
+# installs, and why `Rscript -e` is your friend.
+# ============================================================================
+
+name: 02 - Set up R
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/02-setup-r.yaml'
+      - 'R/**'
+
+jobs:
+  r-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # r-lib/actions is the R community's official action set, maintained by
+      # the same people who maintain devtools/usethis. Use these rather than
+      # apt-get install r-base: they pin versions and wire up the binary
+      # repositories below.
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          # 'release' = current stable. Also valid: '4.4.1', 'oldrel-1',
+          # 'devel', 'next'. Lesson 04 puts these into a matrix.
+          r-version: 'release'
+
+          # THE MOST IMPORTANT LINE IN R CI.
+          # Posit's Package Manager serves precompiled Linux binaries. Without
+          # it, every package compiles from source and a job that should take
+          # 90 seconds takes 20 minutes.
+          use-public-rspm: true
+
+      - name: Confirm the R install
+        run: |
+          Rscript -e 'sessionInfo()'
+          Rscript -e 'cat("Repos in use:\n"); print(getOption("repos"))'
+
+      # `Rscript -e` runs an expression. Note the quoting: the outer shell
+      # sees single quotes, so use double quotes inside the R code.
+      - name: Run some R
+        run: |
+          Rscript -e 'cat("2 + 2 =", 2 + 2, "\n")'
+          Rscript -e 'print(head(mtcars, 3))'
+
+      # Sourcing your own files without installing the package. This works
+      # for a quick smoke test but is NOT how you should run tests -- lesson
+      # 03 does it properly by installing the package first.
+      - name: Source the package files directly
+        run: |
+          Rscript -e '
+            for (f in list.files("R", full.names = TRUE)) source(f)
+            print(enrollment_by_site(demo_enrollment()))
+            cat("Screen failure rate:", screen_failure_rate(demo_enrollment()), "\n")
+          '
+
+      # Deliberate failure demo -- disabled. Flip `if:` to true and re-run to
+      # see what a red job looks like, and note that the steps after it are
+      # skipped, not run.
+      - name: Fail on purpose
+        if: false
+        run: Rscript -e 'stop("This is what a failing R step looks like.")'

@@ -1,0 +1,26 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.DS_Store
+
+# R CMD check output
+*.Rcheck/
+*.tar.gz
+
+# renv: commit renv.lock and .Rprofile, ignore the library itself
+renv/library/
+renv/local/
+renv/cellar/
+renv/staging/
+renv/python/
+renv/sandbox/
+
+# CI local output
+test-results.xml
+cobertura.xml
+coverage-pct.txt
+
+# shinytest2 new/failed snapshots (the accepted _snaps/ dir IS committed)
+tests/testthat/_snaps/**/*.new.*

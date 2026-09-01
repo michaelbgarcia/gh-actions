@@ -1,0 +1,181 @@
+# ============================================================================
+# LESSON 06 - R CMD check and test coverage.
+#
+# New ideas: the full R CMD check gate, covr, writing a PR comment from a
+# workflow, GITHUB_TOKEN and least-privilege `permissions`.
+# ============================================================================
+
+name: 06 - R CMD check and coverage
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege. By default GITHUB_TOKEN gets broad write scopes; narrowing
+# them here means a compromised third-party action cannot push to your repo.
+# Get in this habit early -- it is the single highest-value security setting
+# in Actions.
+permissions:
+  contents: read
+  pull-requests: write   # needed only by the "comment on the PR" step
+
+jobs:
+
+  # ------------------------------------------------------------------
+  # Job 1: the thorough gate. Slower than test_local() -- it also checks
+  # documentation, examples, NAMESPACE consistency, and portability.
+  # ------------------------------------------------------------------
+  r-cmd-check:
+    runs-on: ubuntu-latest
+
+    env:
+      # Turn NOTEs into failures? Not yet -- but see the --as-cran note below.
+      _R_CHECK_FORCE_SUGGESTS_: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      # r-lib's wrapper around R CMD check. It parses the output and fails the
+      # job on errors/warnings according to `error-on`.
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          # 'error' | 'warning' | 'note'. Start at 'warning'; tighten to
+          # 'note' once the package is clean and you want to keep it that way.
+          error-on: '"warning"'
+          # Skip the shinytest2 browser test here -- job 3 owns that.
+          args: 'c("--no-manual", "--as-cran")'
+          upload-snapshots: true
+
+  # ------------------------------------------------------------------
+  # Job 2: coverage. Runs in parallel with the check job.
+  # ------------------------------------------------------------------
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::covr, any::xml2, local::.
+          needs: coverage
+
+      - name: Measure coverage
+        run: |
+          Rscript -e '
+            cov <- covr::package_coverage(
+              quiet = FALSE,
+              # The Shiny app is exercised by shinytest2, not unit tests.
+              # Counting it here would make the number a lie.
+              line_exclusions = list("R/app.R")
+            )
+
+            print(cov)
+            pct <- covr::percent_coverage(cov)
+            cat(sprintf("\nTOTAL: %.1f%%\n", pct))
+
+            covr::to_cobertura(cov, filename = "cobertura.xml")
+            writeLines(sprintf("%.1f", pct), "coverage-pct.txt")
+
+            # A floor, not a target. Set it just below where you are today and
+            # ratchet it up; a floor you set aspirationally just gets ignored.
+            floor <- 80
+            if (pct < floor) {
+              cat(sprintf("::error::Coverage %.1f%% is below the %d%% floor.\n", pct, floor))
+              quit(status = 1)
+            }
+          '
+
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            cobertura.xml
+            coverage-pct.txt
+          if-no-files-found: warn
+
+      # Writing back to the PR. `github-script` runs JS with an authenticated
+      # Octokit client already wired up -- much less fiddly than curl-ing the
+      # REST API by hand.
+      - name: Comment coverage on the PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let pct = 'unknown';
+            try { pct = fs.readFileSync('coverage-pct.txt', 'utf8').trim(); } catch (e) {}
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Test coverage: ${pct}%**\n\n_Posted by \`06-check-and-coverage.yaml\`._`
+            });
+
+  # ------------------------------------------------------------------
+  # Job 3: the browser test, isolated so its slowness and flakiness do not
+  # delay or mask the two jobs above.
+  # ------------------------------------------------------------------
+  shiny-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::shinytest2, any::testthat, local::.
+          needs: check
+
+      # shinytest2 drives headless Chrome via chromote. GitHub's ubuntu images
+      # ship Chrome already, but pinning it makes the run reproducible.
+      - uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install enrollr
+        run: R CMD INSTALL --no-multiarch --with-keep.source .
+
+      - name: Run the shinytest2 suite
+        run: |
+          Rscript -e '
+            testthat::test_local(
+              filter = "app",
+              stop_on_failure = TRUE
+            )
+          '
+
+      # Snapshot diffs are the point of shinytest2. When a test fails you want
+      # the before/after images, not just "expected != actual".
+      - name: Upload shinytest2 artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinytest2-failures
+          path: tests/testthat/_snaps/
+          if-no-files-found: ignore

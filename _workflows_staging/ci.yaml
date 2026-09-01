@@ -1,0 +1,221 @@
+# ============================================================================
+# THE FINAL FORM
+#
+# This is what the seven lessons add up to: the workflow you would actually
+# put on a real R/Shiny project. Read the lessons first -- this file assumes
+# you already know why each key is here, so the comments explain DECISIONS
+# rather than syntax.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ------------------------------------------------------------------
+  # Fast feedback. One OS, one R version, unit tests only. Ordered first
+  # deliberately: if the logic is broken, you find out in ~2 minutes rather
+  # than waiting out a five-platform matrix.
+  # ------------------------------------------------------------------
+  quick-test:
+    name: Unit tests (fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # a hung job otherwise burns 6 hours of minutes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::testthat, any::lintr, local::.
+          needs: check
+
+      - name: Install package
+        run: R CMD INSTALL --no-multiarch --with-keep.source .
+
+      - name: Lint
+        # Style problems should be visible but should not block a merge --
+        # nothing trains a team to ignore CI faster than a red X for a space.
+        continue-on-error: true
+        run: Rscript -e 'lintr::lint_package()'
+
+      - name: testthat
+        run: |
+          Rscript -e '
+            res <- testthat::test_local(
+              reporter = testthat::MultiReporter$new(list(
+                testthat::ProgressReporter$new(),
+                testthat::JunitReporter$new(file = "test-results.xml")
+              )),
+              stop_on_failure = FALSE
+            )
+            df <- as.data.frame(res)
+            if (sum(df$failed) > 0 || any(df$error)) quit(status = 1)
+          '
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          if-no-files-found: warn
+
+  # ------------------------------------------------------------------
+  # The wide matrix. Gated behind quick-test via `needs` so a syntax error
+  # does not spin up five runners to fail the same way five times.
+  # ------------------------------------------------------------------
+  matrix-test:
+    name: ${{ matrix.config.os }} / R ${{ matrix.config.r }}
+    needs: quick-test
+    runs-on: ${{ matrix.config.os }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: ubuntu-latest,  r: 'release' }
+          - { os: ubuntu-latest,  r: 'oldrel-1' }
+          - { os: macos-latest,   r: 'release' }
+          - { os: windows-latest, r: 'release' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck, local::.
+          needs: check
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          error-on: '"warning"'
+          args: 'c("--no-manual")'
+          upload-snapshots: true
+
+  # ------------------------------------------------------------------
+  # Coverage. Parallel with the matrix, not behind it -- the number is useful
+  # even when Windows is broken.
+  # ------------------------------------------------------------------
+  coverage:
+    name: Coverage
+    needs: quick-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::covr, any::xml2, local::.
+          needs: coverage
+
+      - name: covr
+        run: |
+          Rscript -e '
+            cov <- covr::package_coverage(line_exclusions = list("R/app.R"))
+            print(cov)
+            pct <- covr::percent_coverage(cov)
+            cat(sprintf("TOTAL: %.1f%%\n", pct))
+            cat(sprintf("## Coverage: %.1f%%\n", pct),
+                file = Sys.getenv("GITHUB_STEP_SUMMARY"), append = TRUE)
+            if (pct < 80) quit(status = 1)
+          '
+
+  # ------------------------------------------------------------------
+  # Browser tests. Isolated because they are slow and occasionally flaky, and
+  # skipped on draft PRs so work-in-progress does not pay for them.
+  # ------------------------------------------------------------------
+  shiny:
+    name: Shiny (shinytest2)
+    needs: quick-test
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::shinytest2, any::testthat, local::.
+          needs: check
+
+      - uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install package
+        run: R CMD INSTALL --no-multiarch --with-keep.source .
+
+      - name: Run app tests
+        run: Rscript -e 'testthat::test_local(filter = "app", stop_on_failure = TRUE)'
+
+      - name: Upload snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinytest2-failures
+          path: tests/testthat/_snaps/
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # A single job that summarises the rest. Make THIS the required status
+  # check in branch protection: one name to configure, and adding a matrix
+  # row later does not mean editing branch protection settings.
+  # ------------------------------------------------------------------
+  ci-status:
+    name: CI status
+    if: always()
+    needs: [quick-test, matrix-test, coverage, shiny]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fail if anything upstream failed
+        run: |
+          # `needs.*.result` is one of: success, failure, cancelled, skipped.
+          # A skipped job (draft PR) must not count as a failure.
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "Upstream results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::At least one required job did not pass."
+              exit 1
+            fi
+          done
+          echo "All required jobs passed."

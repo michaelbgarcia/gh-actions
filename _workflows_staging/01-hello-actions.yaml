@@ -1,0 +1,85 @@
+# ============================================================================
+# LESSON 01 - The anatomy of a workflow. No R yet.
+#
+# Read this top to bottom once. Every other workflow in this repo is a
+# variation on these six ideas: name, on, jobs, runs-on, steps, run.
+# ============================================================================
+
+# Shows up in the Actions tab sidebar. Not the filename.
+name: 01 - Hello Actions
+
+# WHEN does this run? `on` is the single most important key in the file.
+on:
+  # `workflow_dispatch` puts a "Run workflow" button in the UI. Every lesson
+  # here has it so you can fire any of them by hand without pushing a commit.
+  workflow_dispatch:
+
+  push:
+    branches: [main]
+    # Path filters: this workflow only fires when this file itself changes.
+    # Without this, every lesson would run on every push and the Actions tab
+    # would be unreadable.
+    paths:
+      - '.github/workflows/01-hello-actions.yaml'
+
+# A workflow is a set of JOBS. Jobs run in PARALLEL by default, each on its
+# own fresh virtual machine. Nothing is shared between them unless you say so.
+jobs:
+
+  greet:
+    # `runs-on` picks the VM image. ubuntu-latest is fastest and cheapest;
+    # macos and windows runners cost more minutes (a lot more, on private
+    # repos). Lesson 04 uses all three.
+    runs-on: ubuntu-latest
+
+    # A job is an ordered list of STEPS. Steps run sequentially in the same
+    # working directory on the same machine. If one fails, the rest are
+    # skipped and the job goes red.
+    steps:
+
+      # A step is either `run` (a shell command) or `uses` (someone else's
+      # reusable action). This one is `run`.
+      - name: Say hello
+        run: echo "Hello from a GitHub-hosted runner."
+
+      # `run` blocks are real bash. Multi-line with the `|` YAML block scalar.
+      - name: Look around the machine
+        run: |
+          echo "OS      : $(uname -s)"
+          echo "Kernel  : $(uname -r)"
+          echo "CPUs    : $(nproc)"
+          echo "RAM     : $(free -h | awk '/Mem:/ {print $2}')"
+          echo "Disk    : $(df -h / | awk 'NR==2 {print $4}') free"
+          echo "Workdir : $(pwd)"
+
+      # The `github` CONTEXT carries metadata about what triggered the run.
+      # These expressions are evaluated before the shell ever sees them.
+      - name: Inspect the trigger
+        run: |
+          echo "Event     : ${{ github.event_name }}"
+          echo "Ref       : ${{ github.ref }}"
+          echo "SHA       : ${{ github.sha }}"
+          echo "Actor     : ${{ github.actor }}"
+          echo "Run number: ${{ github.run_number }}"
+
+      # KEY POINT: the runner does NOT have your code until you check it out.
+      # Comment out this step and watch the next one fail.
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Prove the code is here now
+        run: ls -la
+
+  # A second job. It starts at the same time as `greet` unless you say
+  # otherwise -- and it does, via `needs`.
+  second-job:
+    runs-on: ubuntu-latest
+    # `needs` creates a dependency edge. This job waits for `greet` to succeed.
+    needs: greet
+    steps:
+      - name: Explain what just happened
+        run: |
+          echo "This job waited for 'greet' because of the 'needs:' key."
+          echo "It also runs on a COMPLETELY DIFFERENT machine -- nothing"
+          echo "greet wrote to disk exists here. Sharing files between jobs"
+          echo "requires actions/upload-artifact + actions/download-artifact."

@@ -1,0 +1,22 @@
+Package: enrollr
+Title: Toy Clinical Enrollment Helpers for Learning GitHub Actions
+Version: 0.1.0
+Authors@R:
+    person("Michael", "Garcia", email = "michaelbgarcia@gmail.com", role = c("aut", "cre"))
+Description: A deliberately small package of subject-enrollment helpers used as
+    the test subject for a hands-on GitHub Actions course. Every function here
+    exists to give testthat something meaningful to assert against, and to give
+    CI something meaningful to break.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends:
+    R (>= 4.1)
+Suggests:
+    testthat (>= 3.2.0),
+    covr,
+    shiny,
+    shinytest2,
+    lintr
+Config/testthat/edition: 3

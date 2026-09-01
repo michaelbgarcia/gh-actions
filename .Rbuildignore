@@ -1,0 +1,11 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.github$
+^docs$
+^renv$
+^renv\.lock$
+^\.lintr$
+^LICENSE\.md$
+^cobertura\.xml$
+^test-results\.xml$
+^coverage-pct\.txt$

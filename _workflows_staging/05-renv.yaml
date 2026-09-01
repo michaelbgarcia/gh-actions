@@ -1,0 +1,105 @@
+# ============================================================================
+# LESSON 05 - renv: pinning exact package versions in CI.
+#
+# This is the lesson that matters most for regulated work. DESCRIPTION says
+# "testthat (>= 3.2.0)"; renv.lock says "testthat 3.2.1, from CRAN, hash
+# abc123". Only the second one is reproducible two years from now.
+#
+# New ideas: setup-renv, manual actions/cache, cache keys, and the
+# restore-keys fallback ladder.
+# ============================================================================
+
+name: 05 - renv restore and cache
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'renv.lock'
+      - '.github/workflows/05-renv.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'renv.lock'
+
+jobs:
+  renv-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # BEFORE THIS WORKFLOW WILL DO ANYTHING you need a lockfile. Run this
+      # once locally, then commit renv.lock and .Rprofile:
+      #
+      #   install.packages("renv")
+      #   renv::init()                       # snapshots what you have
+      #   renv::install("testthat", "covr", "shiny", "shinytest2")
+      #   renv::snapshot()
+      #
+      # This guard makes the intent explicit instead of failing three steps
+      # later with a confusing message.
+      - name: Check for a lockfile
+        run: |
+          if [ ! -f renv.lock ]; then
+            echo "::error::No renv.lock found. Run renv::init() locally and commit it."
+            echo "See docs/lessons/05-renv.md for the exact commands."
+            exit 1
+          fi
+          echo "Lockfile found. Packages recorded:"
+          grep -c '"Package"' renv.lock
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      # setup-renv reads renv.lock, restores the exact versions, and handles
+      # the cache for you. This is the one-liner version.
+      - name: Restore the renv library
+        uses: r-lib/actions/setup-renv@v2
+
+      # --------------------------------------------------------------------
+      # WHAT setup-renv IS DOING FOR YOU, spelled out.
+      #
+      # You do not need this in real work -- it is here so the caching model
+      # stops being magic. Cache keys are the part people get wrong.
+      #
+      #   key:          exact match. Hit = restore and skip install entirely.
+      #   restore-keys: prefix-matched fallbacks, newest first. A partial hit
+      #                 restores a slightly stale library, so the install step
+      #                 only has to fetch the delta.
+      #
+      # hashFiles() changes whenever renv.lock changes, which is exactly when
+      # the cached library becomes wrong. That is the whole trick.
+      # --------------------------------------------------------------------
+      #
+      # - uses: actions/cache@v4
+      #   with:
+      #     path: ~/.cache/R/renv
+      #     key: ${{ runner.os }}-renv-${{ hashFiles('renv.lock') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-renv-
+      # - run: Rscript -e 'renv::restore()'
+
+      - name: Show what was restored
+        run: |
+          Rscript -e '
+            ip <- installed.packages()[, c("Package", "Version")]
+            cat("Library:", .libPaths()[1], "\n")
+            cat("Packages:", nrow(ip), "\n\n")
+            print(head(ip[order(rownames(ip)), ], 20))
+          '
+
+      # renv's own consistency check: does the project actually use what the
+      # lockfile records, and vice versa? Catches the classic "I library()'d
+      # something and forgot to snapshot" bug before a colleague hits it.
+      - name: Check the lockfile is in sync
+        run: Rscript -e 'renv::status()'
+
+      - name: Install enrollr
+        run: R CMD INSTALL --no-multiarch --with-keep.source .
+
+      - name: Run testthat against pinned versions
+        run: Rscript -e 'testthat::test_local(stop_on_failure = TRUE)'

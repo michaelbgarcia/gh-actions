@@ -1,0 +1,92 @@
+# ============================================================================
+# LESSON 04 - Matrix builds: the same job across many R versions and OSes.
+#
+# New ideas: strategy.matrix, include/exclude, fail-fast, expressions in
+# `runs-on`, and continue-on-error for known-shaky combinations.
+# ============================================================================
+
+name: 04 - Matrix across R versions and OSes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/04-matrix.yaml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-matrix:
+    # This expression is evaluated per matrix combination.
+    runs-on: ${{ matrix.config.os }}
+
+    # A readable name in the Actions UI. Without this you get
+    # "test-matrix (ubuntu-latest, release)" which is fine but noisy.
+    name: ${{ matrix.config.os }} / R ${{ matrix.config.r }}
+
+    strategy:
+      # DEFAULT IS fail-fast: true, which cancels every sibling job the moment
+      # one fails. For a test matrix you almost always want false -- otherwise
+      # a Windows failure hides the fact that macOS also failed.
+      fail-fast: false
+
+      matrix:
+        # Using a single `config` object instead of two independent lists
+        # (os + r) gives you explicit control over which pairs actually run.
+        # Two lists produce the full cartesian product, which is usually more
+        # jobs than you want to pay for.
+        config:
+          - { os: ubuntu-latest,  r: 'release' }
+          - { os: ubuntu-latest,  r: 'oldrel-1' }
+          - { os: ubuntu-latest,  r: 'devel',   allow-failure: true }
+          - { os: macos-latest,   r: 'release' }
+          - { os: windows-latest, r: 'release' }
+
+    env:
+      # Do not let a warning in an installed dependency fail your build.
+      R_KEEP_PKG_SOURCE: yes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only needed for r-version: 'devel' on Ubuntu, but harmless elsewhere.
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          use-public-rspm: true
+          # R-devel occasionally has no binaries; let it fall back to source.
+          http-user-agent: ${{ matrix.config.r == 'devel' && 'release' || '' }}
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::testthat, local::.
+          needs: check
+          # Windows and macOS runners are slower; give them room.
+          cache-version: 1
+
+      - name: Install enrollr
+        run: R CMD INSTALL --no-multiarch --with-keep.source .
+        shell: bash
+
+      - name: Run testthat
+        # `continue-on-error` marks the job green-with-a-note instead of red.
+        # Use it for the R-devel row: you want to SEE breakage coming without
+        # blocking merges on a moving target.
+        continue-on-error: ${{ matrix.config.allow-failure == true }}
+        run: Rscript -e 'testthat::test_local(stop_on_failure = TRUE)'
+        shell: bash
+
+      # NOTE ON SHELLS: Windows runners default to PowerShell. `shell: bash`
+      # above forces bash everywhere so one script works on all three OSes.
+      # Forget it and your `run: |` block will fail on Windows only -- one of
+      # the most common matrix bugs.
+
+      - name: Report the platform
+        if: always()
+        shell: bash
+        run: |
+          echo "- ${{ matrix.config.os }} / R ${{ matrix.config.r }}: ${{ job.status }}" \
+            >> "$GITHUB_STEP_SUMMARY"

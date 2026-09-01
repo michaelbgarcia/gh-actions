@@ -1,0 +1,9 @@
+# Written by hand for this course. In a real package roxygen2 generates this
+# file from the @export tags in R/ -- run devtools::document() and never edit
+# it directly. Lesson 06 adds a CI check that fails if this file drifts.
+export(days_on_study)
+export(demo_enrollment)
+export(enrollment_by_site)
+export(run_app)
+export(screen_failure_rate)
+export(validate_enrollment)
