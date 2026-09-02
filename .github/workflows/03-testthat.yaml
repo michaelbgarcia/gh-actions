@@ -62,11 +62,16 @@ jobs:
       - name: Run testthat
         run: |
           Rscript -e '
+            # test_local() runs with its working directory switched to
+            # tests/testthat/ while tests execute, so a relative file name
+            # here would land there instead of the repo root. Use an
+            # absolute path so it always ends up where the upload step
+            # below expects it.
             res <- testthat::test_local(
               path = ".",
               reporter = testthat::MultiReporter$new(list(
                 testthat::ProgressReporter$new(),
-                testthat::JunitReporter$new(file = "test-results.xml")
+                testthat::JunitReporter$new(file = file.path(normalizePath("."), "test-results.xml"))
               )),
               stop_on_failure = FALSE
             )
